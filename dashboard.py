@@ -15,55 +15,51 @@ API_KEY = "046c21c1487f33afdd0e1313f58ca41e"
 # -------------------------
 # LOCATION FUNCTIONS
 # -------------------------
-def get_coords(city):
-    url = f"http://api.openweathermap.org/geo/1.0/direct?q={city},IN&limit=1&appid={API_KEY}"
-    res = requests.get(url)
-    data = res.json()
-    if len(data) == 0:
-        return None, None
-    return data[0]["lat"], data[0]["lon"]
-
 def get_coords_pincode(pincode):
-    url = f"http://api.openweathermap.org/geo/1.0/zip?zip={pincode},IN&appid={API_KEY}"
-    res = requests.get(url)
-    data = res.json()
-    if data.get("cod") != 200:
+    try:
+        url = f"http://api.openweathermap.org/geo/1.0/zip?zip={pincode},IN&appid={API_KEY}"
+        data = requests.get(url).json()
+        if data.get("cod") != 200:
+            return None, None
+        return data["lat"], data["lon"]
+    except:
         return None, None
-    return data["lat"], data["lon"]
 
 def get_ip_location():
-    res = requests.get("http://ip-api.com/json/")
-    data = res.json()
-    return data["lat"], data["lon"]
+    try:
+        data = requests.get("http://ip-api.com/json/", timeout=5).json()
+        if data["status"] == "success":
+            return data["lat"], data["lon"]
+    except:
+        pass
+    return None, None
 
 # -------------------------
 # WEATHER FUNCTIONS
 # -------------------------
 def get_weather(lat, lon):
-    url = f"http://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={API_KEY}&units=metric"
-    res = requests.get(url)
-    data = res.json()
-    if data.get("cod") != 200:
-        return None, None, "Error"
+    data = requests.get(
+        f"http://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={API_KEY}&units=metric"
+    ).json()
     return data["main"]["temp"], data["main"]["humidity"], data["weather"][0]["main"]
 
 def get_forecast(lat, lon):
-    url = f"http://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={API_KEY}&units=metric"
-    res = requests.get(url)
-    data = res.json()
-    rain = False
+    data = requests.get(
+        f"http://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={API_KEY}&units=metric"
+    ).json()
+
     if data.get("cod") == "200":
         for item in data["list"][:8]:
             if "rain" in item or item["weather"][0]["main"] in ["Rain", "Thunderstorm"]:
-                rain = True
-    return rain
+                return True
+    return False
 
 # -------------------------
-# DECISION FUNCTION
+# DECISION
 # -------------------------
 def decision(moisture, temp, ph, rain):
     if rain:
-        return "DELAY", "Rain expected", "Energy saving due to rain"
+        return "DELAY", "Rain expected", "Energy saving"
     if moisture < 30:
         return "ON", "Irrigation needed", "High energy use"
     elif moisture > 60:
@@ -85,14 +81,13 @@ def suggest_crop(temp, moisture, ph):
         return "General Crop"
 
 # -------------------------
-# ENERGY CALCULATION
+# ENERGY
 # -------------------------
 def energy_calc(pump_kw, hours, tariff, rain):
     optimized_hours = hours * 0.6 if rain else hours
-    base_cost = pump_kw * hours * tariff
-    opt_cost = pump_kw * optimized_hours * tariff
-    saving = base_cost - opt_cost
-    return base_cost, opt_cost, saving
+    base = pump_kw * hours * tariff
+    opt = pump_kw * optimized_hours * tariff
+    return base, opt, base - opt
 
 # -------------------------
 # HEADER
@@ -100,26 +95,38 @@ def energy_calc(pump_kw, hours, tariff, rain):
 st.title("🌱 Soil Digital Twin Platform")
 
 # -------------------------
-# SIDEBAR - LOCATION
+# LOCATION
 # -------------------------
 st.sidebar.header("📍 Location")
 
-mode = st.sidebar.radio("Select Mode", ["City", "Pincode", "Auto GPS"])
+mode = st.sidebar.radio("Mode", ["City", "Pincode", "Auto GPS"])
+
+city_coords = {
+    "Delhi": (28.61, 77.20),
+    "Mumbai": (19.07, 72.87),
+    "Ahmedabad": (23.03, 72.58),
+    "Jaipur": (26.91, 75.78),
+    "Bangalore": (12.97, 77.59),
+    "Chennai": (13.08, 80.27),
+    "Kolkata": (22.57, 88.36)
+}
 
 if mode == "City":
-    location = st.sidebar.text_input("Enter City", "Delhi")
-    lat, lon = get_coords(location)
+    city = st.sidebar.selectbox("Select City", list(city_coords.keys()))
+    lat, lon = city_coords[city]
 
 elif mode == "Pincode":
-    location = st.sidebar.text_input("Enter Pincode", "110001")
-    lat, lon = get_coords_pincode(location)
+    pincode = st.sidebar.text_input("Enter Pincode", "110001")
+    lat, lon = get_coords_pincode(pincode)
+    if lat is None:
+        st.warning("Invalid pincode → using Delhi")
+        lat, lon = city_coords["Delhi"]
 
 else:
     lat, lon = get_ip_location()
-
-if lat is None:
-    st.error("Invalid location")
-    st.stop()
+    if lat is None:
+        st.warning("GPS not detected → using Delhi")
+        lat, lon = city_coords["Delhi"]
 
 # -------------------------
 # WEATHER
@@ -129,44 +136,47 @@ rain = get_forecast(lat, lon)
 
 st.subheader("🌦 Weather")
 
-col1, col2, col3 = st.columns(3)
-col1.metric("Temperature", f"{temp} °C")
-col2.metric("Humidity", f"{humidity} %")
-col3.metric("Condition", condition)
+c1, c2, c3 = st.columns(3)
+c1.metric("Temperature", f"{temp} °C")
+c2.metric("Humidity", f"{humidity} %")
+c3.metric("Condition", condition)
 
 if rain:
-    st.warning("Rain expected → Irrigation delay")
+    st.warning("Rain expected → Irrigation delayed")
 else:
     st.success("No rain → Normal irrigation")
 
 # -------------------------
-# SIDEBAR - CROP & SOIL
+# KPI
 # -------------------------
-st.sidebar.header("🌱 Crop & Soil Inputs")
+st.subheader("📊 Key Indicators")
+
+k1, k2, k3 = st.columns(3)
+moisture = k1.slider("Moisture (%)", 0, 100, 30)
+soil_temp = k2.slider("Temperature (°C)", 0, 50, 30)
+ph = k3.slider("pH", 4.0, 9.0, 7.0)
+
+# -------------------------
+# SIDEBAR INPUTS
+# -------------------------
+st.sidebar.header("🌱 Crop")
 
 crop_type = st.sidebar.selectbox(
     "Select Crop",
     ["Wheat", "Rice", "Cotton", "Maize", "Millet"]
 )
 
-moisture = st.sidebar.slider("Soil Moisture (%)", 0, 100, 30)
-soil_temp = st.sidebar.slider("Soil Temperature (°C)", 0, 50, 30)
-ph = st.sidebar.slider("Soil pH", 4.0, 9.0, 7.0)
+st.sidebar.header("⚡ Energy")
 
-# -------------------------
-# SIDEBAR - ENERGY
-# -------------------------
-st.sidebar.header("⚡ Energy Inputs")
-
-pump_kw = st.sidebar.number_input("Pump Power (kW)", 1.0, 50.0, 5.0)
-hours = st.sidebar.number_input("Run Hours", 1.0, 24.0, 10.0)
-tariff = st.sidebar.number_input("Electricity Cost (₹/kWh)", 1.0, 20.0, 7.0)
+pump_kw = st.sidebar.number_input("Pump (kW)", 1.0, 50.0, 5.0)
+hours = st.sidebar.number_input("Hours", 1.0, 24.0, 10.0)
+tariff = st.sidebar.number_input("₹/kWh", 1.0, 20.0, 7.0)
 
 # -------------------------
 # LOGIC
 # -------------------------
 crop_suggestion = suggest_crop(soil_temp, moisture, ph)
-irrigation, crop_advice, energy_msg = decision(moisture, soil_temp, ph, rain)
+irrigation, advice, energy_msg = decision(moisture, soil_temp, ph, rain)
 base, opt, saving = energy_calc(pump_kw, hours, tariff, rain)
 
 # -------------------------
@@ -174,23 +184,30 @@ base, opt, saving = energy_calc(pump_kw, hours, tariff, rain)
 # -------------------------
 st.subheader("🤖 Decision Panel")
 
-st.write("User Selected Crop:", crop_type)
+st.write("Selected Crop:", crop_type)
 st.write("Suggested Crop:", crop_suggestion)
 
 st.write("Irrigation:", irrigation)
-st.write("Advice:", crop_advice)
+st.write("Advice:", advice)
 st.write("Energy Insight:", energy_msg)
 
-# -------------------------
-# ENERGY DISPLAY
-# -------------------------
-st.subheader("⚡ Energy & Cost Impact")
+# STATUS
+if irrigation == "ON":
+    st.success("🟢 Irrigation Running")
+elif irrigation == "OFF":
+    st.error("🔴 Irrigation Stopped")
+else:
+    st.warning("🟡 Monitoring")
 
-col1, col2, col3 = st.columns(3)
+# -------------------------
+# COST
+# -------------------------
+st.subheader("⚡ Cost Impact")
 
-col1.metric("Base Cost", f"₹ {round(base,2)}")
-col2.metric("Optimized Cost", f"₹ {round(opt,2)}")
-col3.metric("Saving", f"₹ {round(saving,2)}")
+c1, c2, c3 = st.columns(3)
+c1.metric("Base Cost", f"₹ {round(base,2)}")
+c2.metric("Optimized", f"₹ {round(opt,2)}")
+c3.metric("Saving", f"₹ {round(saving,2)}")
 
 # -------------------------
 # GRAPH
@@ -198,11 +215,11 @@ col3.metric("Saving", f"₹ {round(saving,2)}")
 st.subheader("📈 Soil Trend")
 
 data = pd.DataFrame({
-    "Moisture": [random.randint(20, 60) for _ in range(10)],
-    "Temperature": [random.randint(25, 40) for _ in range(10)]
+    "Moisture": [random.randint(20, 60) for _ in range(20)],
+    "Temperature": [random.randint(25, 40) for _ in range(20)]
 })
 
-st.line_chart(data)
+st.line_chart(data, use_container_width=True)
 
 # -------------------------
 # MAP
@@ -213,6 +230,21 @@ m = folium.Map(location=[lat, lon], zoom_start=10)
 folium.Marker([lat, lon]).add_to(m)
 
 st_folium(m, width=700)
+
+# -------------------------
+# REPORT
+# -------------------------
+st.subheader("📄 Download Report")
+
+df = pd.DataFrame({
+    "Temp": [temp],
+    "Moisture": [moisture],
+    "pH": [ph],
+    "Crop": [crop_suggestion],
+    "Saving": [saving]
+})
+
+st.download_button("Download CSV", df.to_csv(index=False), "report.csv")
 
 # -------------------------
 # FOOTER
