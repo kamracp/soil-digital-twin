@@ -1,176 +1,221 @@
 import streamlit as st
 import pandas as pd
 import random
-from digital_twin import decision
-from weather import get_weather, get_weather_forecast
-from energy import energy_calc
-from report_generator import generate_report
+import requests
+import folium
+from streamlit_folium import st_folium
+
 # -------------------------
-# PAGE CONFIG (TOP)
+# CONFIG
 # -------------------------
 st.set_page_config(page_title="Soil Digital Twin", layout="wide")
+
+API_KEY = "046c21c1487f33afdd0e1313f58ca41e"
+
+# -------------------------
+# LOCATION FUNCTIONS
+# -------------------------
+def get_coords(city):
+    url = f"http://api.openweathermap.org/geo/1.0/direct?q={city},IN&limit=1&appid={API_KEY}"
+    res = requests.get(url)
+    data = res.json()
+    if len(data) == 0:
+        return None, None
+    return data[0]["lat"], data[0]["lon"]
+
+def get_coords_pincode(pincode):
+    url = f"http://api.openweathermap.org/geo/1.0/zip?zip={pincode},IN&appid={API_KEY}"
+    res = requests.get(url)
+    data = res.json()
+    if data.get("cod") != 200:
+        return None, None
+    return data["lat"], data["lon"]
+
+def get_ip_location():
+    res = requests.get("http://ip-api.com/json/")
+    data = res.json()
+    return data["lat"], data["lon"]
+
+# -------------------------
+# WEATHER FUNCTIONS
+# -------------------------
+def get_weather(lat, lon):
+    url = f"http://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={API_KEY}&units=metric"
+    res = requests.get(url)
+    data = res.json()
+    if data.get("cod") != 200:
+        return None, None, "Error"
+    return data["main"]["temp"], data["main"]["humidity"], data["weather"][0]["main"]
+
+def get_forecast(lat, lon):
+    url = f"http://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={API_KEY}&units=metric"
+    res = requests.get(url)
+    data = res.json()
+    rain = False
+    if data.get("cod") == "200":
+        for item in data["list"][:8]:
+            if "rain" in item or item["weather"][0]["main"] in ["Rain", "Thunderstorm"]:
+                rain = True
+    return rain
+
+# -------------------------
+# DECISION FUNCTION
+# -------------------------
+def decision(moisture, temp, ph, rain):
+    if rain:
+        return "DELAY", "Rain expected", "Energy saving due to rain"
+    if moisture < 30:
+        return "ON", "Irrigation needed", "High energy use"
+    elif moisture > 60:
+        return "OFF", "Soil wet", "Energy saved"
+    else:
+        return "MONITOR", "Balanced", "Normal energy"
+
+# -------------------------
+# CROP SUGGESTION
+# -------------------------
+def suggest_crop(temp, moisture, ph):
+    if temp > 30 and moisture < 40:
+        return "Millet / Bajra"
+    elif moisture > 60:
+        return "Rice"
+    elif 20 < temp < 30 and 6 < ph < 7.5:
+        return "Wheat"
+    else:
+        return "General Crop"
+
+# -------------------------
+# ENERGY CALCULATION
+# -------------------------
+def energy_calc(pump_kw, hours, tariff, rain):
+    optimized_hours = hours * 0.6 if rain else hours
+    base_cost = pump_kw * hours * tariff
+    opt_cost = pump_kw * optimized_hours * tariff
+    saving = base_cost - opt_cost
+    return base_cost, opt_cost, saving
 
 # -------------------------
 # HEADER
 # -------------------------
-st.title("🌱 Soil Digital Twin - Smart Agriculture Platform")
-st.markdown("### Real-Time Monitoring | AI Decision | Energy Optimization")
+st.title("🌱 Soil Digital Twin Platform")
 
 # -------------------------
-# WEATHER DATA (FIRST)
+# SIDEBAR - LOCATION
 # -------------------------
-weather_temp, humidity, condition = get_weather()
-rain_forecast = get_weather_forecast()
+st.sidebar.header("📍 Location")
 
-st.subheader("🌦 Weather Data")
-st.write("Temperature:", weather_temp)
-st.write("Humidity:", humidity)
-st.write("Condition:", condition)
+mode = st.sidebar.radio("Select Mode", ["City", "Pincode", "Auto GPS"])
 
-st.subheader("🌧 Rain Prediction")
+if mode == "City":
+    location = st.sidebar.text_input("Enter City", "Delhi")
+    lat, lon = get_coords(location)
 
-if rain_forecast:
-    st.warning("Rain expected → Irrigation delayed")
+elif mode == "Pincode":
+    location = st.sidebar.text_input("Enter Pincode", "110001")
+    lat, lon = get_coords_pincode(location)
+
+else:
+    lat, lon = get_ip_location()
+
+if lat is None:
+    st.error("Invalid location")
+    st.stop()
+
+# -------------------------
+# WEATHER
+# -------------------------
+temp, humidity, condition = get_weather(lat, lon)
+rain = get_forecast(lat, lon)
+
+st.subheader("🌦 Weather")
+
+col1, col2, col3 = st.columns(3)
+col1.metric("Temperature", f"{temp} °C")
+col2.metric("Humidity", f"{humidity} %")
+col3.metric("Condition", condition)
+
+if rain:
+    st.warning("Rain expected → Irrigation delay")
 else:
     st.success("No rain → Normal irrigation")
 
 # -------------------------
-# SIDEBAR INPUTS
+# SIDEBAR - CROP & SOIL
 # -------------------------
-st.sidebar.header("⚙️ Control Panel")
+st.sidebar.header("🌱 Crop & Soil Inputs")
 
 crop_type = st.sidebar.selectbox(
     "Select Crop",
-    ["Wheat", "Rice", "Cotton", "Potato"]
+    ["Wheat", "Rice", "Cotton", "Maize", "Millet"]
 )
 
 moisture = st.sidebar.slider("Soil Moisture (%)", 0, 100, 30)
-temp = st.sidebar.slider("Temperature (°C)", 0, 50, 30)
+soil_temp = st.sidebar.slider("Soil Temperature (°C)", 0, 50, 30)
 ph = st.sidebar.slider("Soil pH", 4.0, 9.0, 7.0)
-st.sidebar.subheader("⚡ Energy Inputs")
 
-pump_kw = st.sidebar.number_input("Pump Power (kW)", 1, 100, 5)
-hours_run = st.sidebar.slider("Normal Run Hours", 1, 24, 10)
-tariff = st.sidebar.number_input("Electricity Tariff (₹/kWh)", 1.0, 20.0, 7.0)
 # -------------------------
-# KPI DISPLAY
+# SIDEBAR - ENERGY
 # -------------------------
+st.sidebar.header("⚡ Energy Inputs")
+
+pump_kw = st.sidebar.number_input("Pump Power (kW)", 1.0, 50.0, 5.0)
+hours = st.sidebar.number_input("Run Hours", 1.0, 24.0, 10.0)
+tariff = st.sidebar.number_input("Electricity Cost (₹/kWh)", 1.0, 20.0, 7.0)
+
+# -------------------------
+# LOGIC
+# -------------------------
+crop_suggestion = suggest_crop(soil_temp, moisture, ph)
+irrigation, crop_advice, energy_msg = decision(moisture, soil_temp, ph, rain)
+base, opt, saving = energy_calc(pump_kw, hours, tariff, rain)
+
+# -------------------------
+# DECISION PANEL
+# -------------------------
+st.subheader("🤖 Decision Panel")
+
+st.write("User Selected Crop:", crop_type)
+st.write("Suggested Crop:", crop_suggestion)
+
+st.write("Irrigation:", irrigation)
+st.write("Advice:", crop_advice)
+st.write("Energy Insight:", energy_msg)
+
+# -------------------------
+# ENERGY DISPLAY
+# -------------------------
+st.subheader("⚡ Energy & Cost Impact")
+
 col1, col2, col3 = st.columns(3)
 
-col1.metric("💧 Moisture (%)", moisture)
-col2.metric("🌡 Temperature (°C)", temp)
-col3.metric("⚗️ pH Level", ph)
+col1.metric("Base Cost", f"₹ {round(base,2)}")
+col2.metric("Optimized Cost", f"₹ {round(opt,2)}")
+col3.metric("Saving", f"₹ {round(saving,2)}")
 
 # -------------------------
-# DIGITAL TWIN DECISION
+# GRAPH
 # -------------------------
-irrigation, crop_suggestion, energy = decision(moisture, temp, ph, rain_forecast)
-optimized_hours = hours_run
+st.subheader("📈 Soil Trend")
 
-if "DELAY" in irrigation:
-    optimized_hours = hours_run * 0.5
+data = pd.DataFrame({
+    "Moisture": [random.randint(20, 60) for _ in range(10)],
+    "Temperature": [random.randint(25, 40) for _ in range(10)]
+})
 
-elif irrigation == "OFF":
-    optimized_hours = 0
+st.line_chart(data)
 
-elif irrigation == "ON":
-    optimized_hours = hours_run * 0.8
-result = energy_calc(pump_kw, hours_run, tariff, optimized_hours)
-
-optimized_hours = hours_run
-
-if "DELAY" in irrigation:
-    optimized_hours = hours_run * 0.5
-
-elif irrigation == "OFF":
-    optimized_hours = 0
-
-elif irrigation == "ON":
-    optimized_hours = hours_run * 0.8
-# Status indicator
-if irrigation == "ON":
-    status = "🟢 Irrigation Running"
-elif irrigation == "OFF":
-    status = "🔴 Irrigation Stopped"
-else:
-    status = "🟡 Monitoring"
-report_data = {
-    "crop": crop_type,
-    "moisture": moisture,
-    "temp": temp,
-    "ph": ph,
-    "irrigation": irrigation,
-    "energy": energy,
-    "base_cost": result["base_cost"],
-    "opt_cost": result["opt_cost"],
-    "saving": result["saving_rs"],
-    "saving_percent": result["saving_percent"]
-}
 # -------------------------
-# MAIN DASHBOARD
+# MAP
 # -------------------------
-col_left, col_right = st.columns([2, 1])
+st.subheader("🗺 Location Map")
 
-# LEFT: Graph
-with col_left:
-    st.subheader("📈 Soil Trend (Simulated)")
+m = folium.Map(location=[lat, lon], zoom_start=10)
+folium.Marker([lat, lon]).add_to(m)
 
-    data = pd.DataFrame({
-        "Moisture": [random.randint(20, 60) for _ in range(10)],
-        "Temperature": [random.randint(25, 40) for _ in range(10)]
-    })
+st_folium(m, width=700)
 
-    st.line_chart(data)
-
-# RIGHT: Decision Panel
-# RIGHT: Decision Panel
-with col_right:
-    st.subheader("🤖 AI Decision Panel")
-
-    st.info(f"**Selected Crop:** {crop_type}")
-    st.success(f"💧 Irrigation: {irrigation}")
-    st.write(f"🌾 Suggested Crop: {crop_suggestion}")
-    st.write(f"⚡ Energy Insight: {energy}")
-    st.markdown(f"### Status: {status}")
-
-    # 👉 NEW ADDITION (₹ impact)
-    st.markdown("---")
-    st.subheader("⚡ Cost Impact")
-
-    st.metric("Base Cost (₹)", result["base_cost"])
-    st.metric("Optimized Cost (₹)", result["opt_cost"])
-    st.metric("Saving (₹)", result["saving_rs"])
-
-   
-    st.caption(f"Saving %: {result['saving_percent']} %")
-if result["saving_rs"] > 0:
-        st.success(f"💰 You save ₹ {result['saving_rs']} ({result['saving_percent']}%)")
-else:
-        st.warning("No saving in current condition")
-# -------------------------
-# CONTROL BUTTONS
-# -------------------------
-st.subheader("🎛 Control")
-
-colA, colB = st.columns(2)
-
-if colA.button("▶️ Start Irrigation"):
-    st.success("Pump Started")
-
-if colB.button("⏹ Stop Irrigation"):
-    st.error("Pump Stopped")
-if st.button("📄 Generate Report"):
-    file = generate_report(report_data)
-
-    with open(file, "rb") as f:
-        st.download_button(
-            label="⬇ Download PDF",
-            data=f,
-            file_name="Soil_Report.pdf",
-            mime="application/pdf"
-        )
 # -------------------------
 # FOOTER
 # -------------------------
 st.markdown("---")
-st.markdown("**Developed by Kamra Energy Digital Twin Systems**")
+st.markdown("Developed by Kamra Digital Twin Systems")
