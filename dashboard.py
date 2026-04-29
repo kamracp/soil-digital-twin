@@ -25,14 +25,7 @@ def get_coords_pincode(pincode):
     except:
         return None, None
 
-def get_ip_location():
-    try:
-        data = requests.get("http://ip-api.com/json/", timeout=5).json()
-        if data["status"] == "success":
-            return data["lat"], data["lon"]
-    except:
-        pass
-    return None, None
+
 
 # -------------------------
 # WEATHER FUNCTIONS
@@ -102,7 +95,7 @@ st.title("🌱 Soil Digital Twin Platform")
 # -------------------------
 st.sidebar.header("📍 Location")
 
-mode = st.sidebar.radio("Mode", ["City", "Pincode", "Auto GPS"])
+mode = st.sidebar.radio("Mode", ["City", "Pincode", ])
 
 city_coords = {
     "Delhi": (28.61, 77.20),
@@ -126,14 +119,6 @@ elif mode == "Pincode":
         st.warning("Invalid pincode → using Delhi")
         lat, lon = city_coords["Delhi"]
 
-elif mode == "Auto GPS":
-    st.info("Using approximate GPS (IP-based)")
-
-    lat, lon = get_ip_location()
-
-    if lat is None:
-        st.warning("GPS not detected → using Delhi")
-        lat, lon = city_coords["Delhi"]
 
 # -------------------------
 # WEATHER
