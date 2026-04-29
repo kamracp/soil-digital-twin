@@ -41,6 +41,7 @@ def get_weather(lat, lon):
     data = requests.get(
         f"http://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={API_KEY}&units=metric"
     ).json()
+
     return data["main"]["temp"], data["main"]["humidity"], data["weather"][0]["main"]
 
 def get_forecast(lat, lon):
@@ -55,11 +56,12 @@ def get_forecast(lat, lon):
     return False
 
 # -------------------------
-# DECISION
+# DECISION LOGIC
 # -------------------------
 def decision(moisture, temp, ph, rain):
     if rain:
         return "DELAY", "Rain expected", "Energy saving"
+
     if moisture < 30:
         return "ON", "Irrigation needed", "High energy use"
     elif moisture > 60:
@@ -81,13 +83,14 @@ def suggest_crop(temp, moisture, ph):
         return "General Crop"
 
 # -------------------------
-# ENERGY
+# ENERGY CALC
 # -------------------------
 def energy_calc(pump_kw, hours, tariff, rain):
     optimized_hours = hours * 0.6 if rain else hours
     base = pump_kw * hours * tariff
     opt = pump_kw * optimized_hours * tariff
-    return base, opt, base - opt
+    saving = base - opt
+    return base, opt, saving
 
 # -------------------------
 # HEADER
@@ -95,7 +98,7 @@ def energy_calc(pump_kw, hours, tariff, rain):
 st.title("🌱 Soil Digital Twin Platform")
 
 # -------------------------
-# LOCATION
+# LOCATION BLOCK (CLEAN)
 # -------------------------
 st.sidebar.header("📍 Location")
 
@@ -118,12 +121,16 @@ if mode == "City":
 elif mode == "Pincode":
     pincode = st.sidebar.text_input("Enter Pincode", "110001")
     lat, lon = get_coords_pincode(pincode)
+
     if lat is None:
         st.warning("Invalid pincode → using Delhi")
         lat, lon = city_coords["Delhi"]
 
-else:
+elif mode == "Auto GPS":
+    st.info("Using approximate GPS (IP-based)")
+
     lat, lon = get_ip_location()
+
     if lat is None:
         st.warning("GPS not detected → using Delhi")
         lat, lon = city_coords["Delhi"]
@@ -142,34 +149,31 @@ c2.metric("Humidity", f"{humidity} %")
 c3.metric("Condition", condition)
 
 if rain:
-    st.warning("Rain expected → Irrigation delayed")
+    st.warning("Rain expected → Irrigation delay")
 else:
     st.success("No rain → Normal irrigation")
 
 # -------------------------
-# KPI
+# INPUTS
 # -------------------------
-st.subheader("📊 Key Indicators")
-
-k1, k2, k3 = st.columns(3)
-moisture = k1.slider("Moisture (%)", 0, 100, 30)
-soil_temp = k2.slider("Temperature (°C)", 0, 50, 30)
-ph = k3.slider("pH", 4.0, 9.0, 7.0)
-
-# -------------------------
-# SIDEBAR INPUTS
-# -------------------------
-st.sidebar.header("🌱 Crop")
+st.sidebar.header("🌱 Crop & Soil")
 
 crop_type = st.sidebar.selectbox(
     "Select Crop",
     ["Wheat", "Rice", "Cotton", "Maize", "Millet"]
 )
 
+moisture = st.sidebar.slider("Moisture (%)", 0, 100, 30)
+soil_temp = st.sidebar.slider("Temperature (°C)", 0, 50, 30)
+ph = st.sidebar.slider("pH", 4.0, 9.0, 7.0)
+
+# -------------------------
+# ENERGY INPUTS
+# -------------------------
 st.sidebar.header("⚡ Energy")
 
-pump_kw = st.sidebar.number_input("Pump (kW)", 1.0, 50.0, 5.0)
-hours = st.sidebar.number_input("Hours", 1.0, 24.0, 10.0)
+pump_kw = st.sidebar.number_input("Pump Power (kW)", 1.0, 50.0, 5.0)
+hours = st.sidebar.number_input("Run Hours", 1.0, 24.0, 10.0)
 tariff = st.sidebar.number_input("₹/kWh", 1.0, 20.0, 7.0)
 
 # -------------------------
@@ -186,12 +190,10 @@ st.subheader("🤖 Decision Panel")
 
 st.write("Selected Crop:", crop_type)
 st.write("Suggested Crop:", crop_suggestion)
-
 st.write("Irrigation:", irrigation)
 st.write("Advice:", advice)
 st.write("Energy Insight:", energy_msg)
 
-# STATUS
 if irrigation == "ON":
     st.success("🟢 Irrigation Running")
 elif irrigation == "OFF":
@@ -206,7 +208,7 @@ st.subheader("⚡ Cost Impact")
 
 c1, c2, c3 = st.columns(3)
 c1.metric("Base Cost", f"₹ {round(base,2)}")
-c2.metric("Optimized", f"₹ {round(opt,2)}")
+c2.metric("Optimized Cost", f"₹ {round(opt,2)}")
 c3.metric("Saving", f"₹ {round(saving,2)}")
 
 # -------------------------
@@ -237,7 +239,7 @@ st_folium(m, width=700)
 st.subheader("📄 Download Report")
 
 df = pd.DataFrame({
-    "Temp": [temp],
+    "Temperature": [temp],
     "Moisture": [moisture],
     "pH": [ph],
     "Crop": [crop_suggestion],
