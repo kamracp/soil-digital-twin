@@ -88,7 +88,7 @@ def energy_calc(pump_kw, hours, tariff, rain):
 # -------------------------
 # HEADER
 # -------------------------
-st.title("🌱 Soil Digital Twin Platform")
+st.title("🌱 Soil Digital Twin -Kamra Version")
 
 # -------------------------
 # LOCATION BLOCK (CLEAN)
